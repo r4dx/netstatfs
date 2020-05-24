@@ -2,7 +2,7 @@
 FUSE app to map network statistics to filesystem written in GO.
 
 # Hierarchy
-Hierarchy:
+```
   /
   ├ processes
     ├ <process_id>_<process_name>
@@ -14,7 +14,8 @@ Hierarchy:
       ├ udp6
     ├ <process_id>_<process_name>
     ├ ...
- 
+```
+
 # Roadmap  
 1. PoC
 1. Refactor, go module, tests
