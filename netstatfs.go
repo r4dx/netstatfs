@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"flag"
-	"net"
+	"fmt"
+	"log"
 	"os"
 	"syscall"
 
@@ -14,14 +15,14 @@ import (
 // import "github.com/google/gopacket/pcap"
 
 func main() {
-	var mountpoint = flag.String("mount", "", "mountpoint for FS")
+	mountpoint := flag.String("mount", "", "mountpoint for FS")
 	flag.Parse()
-	var conn, err = fuse.Mount(*mountpoint, fuse.FSName("netstatfs"))
+	conn, err := fuse.Mount(*mountpoint, fuse.FSName("netstatfs"))
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
-	err = fs.Serve(conn, FS{1})
+	err = fs.Serve(conn, NewFS())
 	if err != nil {
 		panic(err)
 	}
@@ -29,62 +30,88 @@ func main() {
 
 type FS struct {
 	RootINode uint64
+	LastINode uint64
+	fnToId    *map[string]uint64
 }
 
-type NI struct {
-	Ni    net.Interface
-	Inode uint64
+func NewFS() *FS {
+	fnToId := make(map[string]uint64, 0)
+	return &FS{1, 1, &fnToId}
+}
+
+func (me FS) Register(fn string) (uint64, error) {
+	log.Printf("FS.Register - adding " + fn)
+	if id, exists := (*me.fnToId)[fn]; exists {
+		log.Fatal("FS.Register - file exists " + fn)
+		return id, syscall.EEXIST
+	}
+	me.LastINode++
+	(*me.fnToId)[fn] = me.LastINode
+	return me.LastINode, nil
+}
+
+type ProcessEntry struct {
+	Filename string
+	Process  Process
+	INode    uint64
 }
 
 func (me FS) Root() (fs.Node, error) {
-	nis, err := net.Interfaces()
+	processes, err := GetProcesses()
 	if err != nil {
 		return nil, err
 	}
-	nameToNI := make(map[string]NI)
-	for i, ni := range nis {
-		nameToNI[ni.Name] = NI{Ni: ni, Inode: uint64(i) + me.RootINode + 1}
+	filenameToPE := make(map[string]ProcessEntry)
+	for _, pe := range processes {
+		fn := fmt.Sprintf("%d_%s", pe.Id, pe.Name)
+		id, err := me.Register("/" + fn)
+		if err != nil {
+			return nil, err
+		}
+		filenameToPE[fn] = ProcessEntry{Filename: fn, Process: pe, INode: id}
 	}
 
-	return NIDir{nis: &nis, nameToNI: &nameToNI, RootINode: me.RootINode}, nil
+	return RootDir{FilenameToPE: &filenameToPE, Root: &me}, nil
 }
 
-type NIDir struct {
-	RootINode uint64
-	nis       *[]net.Interface
-	nameToNI  *map[string]NI
+type RootDir struct {
+	Root         *FS
+	FilenameToPE *map[string]ProcessEntry
 }
 
-func (me NIDir) Attr(ctx context.Context, attr *fuse.Attr) error {
-	attr.Inode = me.RootINode
+func (me RootDir) Attr(ctx context.Context, attr *fuse.Attr) error {
+	attr.Inode = (*me.Root).RootINode
 	attr.Mode = os.ModeDir | 0o555 // dr-xr-xr-x
 	return nil
 }
 
-func (me NIDir) Lookup(ctx context.Context, name string) (fs.Node, error) {
-	ni := (*me.nameToNI)[name]
-	return NIFile{Inode: ni.Inode}, nil
+func (me RootDir) Lookup(ctx context.Context, name string) (fs.Node, error) {
+	pe := (*me.FilenameToPE)[name]
+	return ProcessDir{Root: me.Root, ProcessEntry: pe, INode: pe.INode}, nil
 }
 
-func (me NIDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
-	result := make([]fuse.Dirent, len(*me.nis))
-	for i, iface := range *me.nis {
-		result[i] = fuse.Dirent{Inode: uint64(i), Name: iface.Name, Type: fuse.DT_File}
+func (me RootDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
+	result := make([]fuse.Dirent, len(*me.FilenameToPE))
+	i := 0
+	for _, pe := range *me.FilenameToPE {
+		result[i] = fuse.Dirent{Inode: pe.INode, Name: pe.Filename, Type: fuse.DT_Dir}
+		i++
 	}
 	return result, nil
 }
 
-type NIFile struct {
-	Inode uint64
+type ProcessDir struct {
+	Root         *FS
+	ProcessEntry ProcessEntry
+	INode        uint64
 }
 
-func (me NIFile) Attr(ctx context.Context, attr *fuse.Attr) error {
-	attr.Inode = me.Inode
-	attr.Mode = 0o444 //r--r--r--
-	attr.Size = 0
+func (me ProcessDir) Attr(ctx context.Context, attr *fuse.Attr) error {
+	attr.Inode = (*me.Root).RootINode
+	attr.Mode = os.ModeDir | 0o555 // dr-xr-xr-x
 	return nil
 }
 
-func (NIFile) ReadAll(ctx context.Context) ([]byte, error) {
+func (me ProcessDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	return nil, syscall.ENOENT
 }
