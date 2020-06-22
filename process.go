@@ -1,8 +1,6 @@
 package main
 
 import (
-	"io/ioutil"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -13,15 +11,17 @@ type Process struct {
 	Name string
 }
 
-const ProcBase = "/proc"
+type ProcessProvider interface {
+	GetProcesses() ([]Process, error)
+	GetProcessById(id uint) (Process, error)
+}
 
-func GetProcesses() ([]Process, error) {
-	procf, err := os.Open(ProcBase)
-	if err != nil {
-		return nil, err
-	}
-	defer procf.Close()
-	fnames, err := procf.Readdirnames(0)
+type ProcfsProcessProvider struct {
+	procfs Procfs
+}
+
+func (me ProcfsProcessProvider) GetProcesses() ([]Process, error) {
+	fnames, err := me.procfs.Readdirnames()
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func GetProcesses() ([]Process, error) {
 	for _, fn := range fnames {
 		if id, err := strconv.Atoi(fn); err == nil && id > 0 {
 			id := uint(id)
-			name, err := GetProcessName(id)
+			name, err := me.GetProcessName(id)
 			if err != nil {
 				return nil, err
 			}
@@ -44,7 +44,15 @@ func GetProcesses() ([]Process, error) {
 	return result, nil
 }
 
-func GetProcessName(id uint) (string, error) {
-	content, err := ioutil.ReadFile(path.Join(ProcBase, strconv.Itoa(int(id)), "comm"))
+func (me ProcfsProcessProvider) GetProcessById(id uint) (Process, error) {
+	name, err := me.GetProcessName(id)
+	if err != nil {
+		return Process{}, err
+	}
+	return Process{Id: id, Name: name}, nil
+}
+
+func (me ProcfsProcessProvider) GetProcessName(id uint) (string, error) {
+	content, err := me.procfs.ReadFile(path.Join(strconv.Itoa(int(id)), "comm"))
 	return strings.TrimSuffix(strings.ReplaceAll(string(content), "/", ""), "\n"), err
 }

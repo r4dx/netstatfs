@@ -4,8 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"bazil.org/fuse"
@@ -22,61 +23,32 @@ func main() {
 		panic(err)
 	}
 	defer conn.Close()
-	err = fs.Serve(conn, NewFS())
+	netstatfs, err := NewNetstatfs()
+	if err != nil {
+		panic(err)
+	}
+	err = fs.Serve(conn, &netstatfs)
 	if err != nil {
 		panic(err)
 	}
 }
 
-type FS struct {
-	RootINode uint64
-	LastINode uint64
-	fnToId    *map[string]uint64
+type Netstatfs struct {
+	ProcessProvider ProcessProvider
+	RootINode       uint64
 }
 
-func NewFS() *FS {
-	fnToId := make(map[string]uint64, 0)
-	return &FS{1, 1, &fnToId}
+func NewNetstatfs() (Netstatfs, error) {
+	return Netstatfs{RootINode: 0,
+		ProcessProvider: ProcfsProcessProvider{ProcfsImpl{}}}, nil
 }
 
-func (me FS) Register(fn string) (uint64, error) {
-	log.Printf("FS.Register - adding " + fn)
-	if id, exists := (*me.fnToId)[fn]; exists {
-		log.Fatal("FS.Register - file exists " + fn)
-		return id, syscall.EEXIST
-	}
-	me.LastINode++
-	(*me.fnToId)[fn] = me.LastINode
-	return me.LastINode, nil
-}
-
-type ProcessEntry struct {
-	Filename string
-	Process  Process
-	INode    uint64
-}
-
-func (me FS) Root() (fs.Node, error) {
-	processes, err := GetProcesses()
-	if err != nil {
-		return nil, err
-	}
-	filenameToPE := make(map[string]ProcessEntry)
-	for _, pe := range processes {
-		fn := fmt.Sprintf("%d_%s", pe.Id, pe.Name)
-		id, err := me.Register("/" + fn)
-		if err != nil {
-			return nil, err
-		}
-		filenameToPE[fn] = ProcessEntry{Filename: fn, Process: pe, INode: id}
-	}
-
-	return RootDir{FilenameToPE: &filenameToPE, Root: &me}, nil
+func (me Netstatfs) Root() (fs.Node, error) {
+	return RootDir{Root: &me}, nil
 }
 
 type RootDir struct {
-	Root         *FS
-	FilenameToPE *map[string]ProcessEntry
+	Root *Netstatfs
 }
 
 func (me RootDir) Attr(ctx context.Context, attr *fuse.Attr) error {
@@ -86,28 +58,59 @@ func (me RootDir) Attr(ctx context.Context, attr *fuse.Attr) error {
 }
 
 func (me RootDir) Lookup(ctx context.Context, name string) (fs.Node, error) {
-	pe := (*me.FilenameToPE)[name]
-	return ProcessDir{Root: me.Root, ProcessEntry: pe, INode: pe.INode}, nil
+	id, err := FileNameToProcessId(name)
+	if err != nil {
+		return nil, err
+	}
+	process, err := me.Root.ProcessProvider.GetProcessById(id)
+	if err != nil {
+		return nil, err
+	}
+	return ProcessDir{Root: me.Root,
+		Process: process,
+		INode:   uint64(process.Id)}, nil
+}
+
+func FileNameToProcessId(name string) (uint, error) {
+	r := strings.Split(name, "_")
+	if len(r) <= 1 {
+		return 0, syscall.ENOENT
+	}
+	if id, err := strconv.Atoi(r[0]); err == nil && id > 0 {
+		return uint(id), nil
+	}
+	return 0, syscall.ENOENT
+}
+
+func ProcessNameToFileName(id uint, name string) string {
+	return fmt.Sprintf("%d_%s", id, name)
 }
 
 func (me RootDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
-	result := make([]fuse.Dirent, len(*me.FilenameToPE))
-	i := 0
-	for _, pe := range *me.FilenameToPE {
-		result[i] = fuse.Dirent{Inode: pe.INode, Name: pe.Filename, Type: fuse.DT_Dir}
-		i++
+	processes, err := (*me.Root).ProcessProvider.GetProcesses()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]fuse.Dirent, len(processes))
+	for i, process := range processes {
+		fn := ProcessNameToFileName(
+			process.Id, process.Name)
+
+		result[i] = fuse.Dirent{Inode: uint64(process.Id),
+			Name: fn,
+			Type: fuse.DT_Dir}
 	}
 	return result, nil
 }
 
 type ProcessDir struct {
-	Root         *FS
-	ProcessEntry ProcessEntry
-	INode        uint64
+	Root    *Netstatfs
+	Process Process
+	INode   uint64
 }
 
 func (me ProcessDir) Attr(ctx context.Context, attr *fuse.Attr) error {
-	attr.Inode = (*me.Root).RootINode
+	attr.Inode = me.INode
 	attr.Mode = os.ModeDir | 0o555 // dr-xr-xr-x
 	return nil
 }
