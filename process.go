@@ -21,14 +21,14 @@ type ProcfsProcessProvider struct {
 }
 
 func (me ProcfsProcessProvider) GetProcesses() ([]Process, error) {
-	fnames, err := me.procfs.Readdirnames()
+	fnames, err := me.procfs.Readdirnames("")
 	if err != nil {
 		return nil, err
 	}
 	r := make([]Process, len(fnames))
 	n := 0
 	for _, fn := range fnames {
-		if id, err := strconv.Atoi(fn); err == nil && id > 0 {
+		if id, err := strconv.ParseUint(fn, 10, 32); err == nil && id > 0 {
 			id := uint(id)
 			name, err := me.GetProcessName(id)
 			if err != nil {
