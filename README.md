@@ -5,7 +5,7 @@ FUSE app to map network statistics to filesystem written in GO.
 ```
   /
   |-- <process_id>_<process_name>
-  |   |-- <fd>_<unix|tcp{,6}|udp{,6}>_<port>_<state>
+  |   |-- <fd>_<unix|tcp{,6}|udp{,6}>_<local_ip>:<local_port>-><remote_ip>:<remote_port>_<state>
   |   `-- ... 
   |-- <process_id>_<process_name>
   `-- ...
@@ -22,3 +22,7 @@ FUSE app to map network statistics to filesystem written in GO.
 1. Resolve links so socket file ids become of format 'socket:[socketInode]' or '[0000]:socketInode'
 1. Stores socketInode -> process in the `pgr_hash` hashmap
 1. Reads /proc/net/{tcp,tcp6,udp,udp6,igmp,igmp6,unix} - each of those have inode field to get process from the `prg_hash` hashmap
+
+NB ss on the other hand uses netlink protocol:
+https://man7.org/linux/man-pages/man7/sock_diag.7.html
+

@@ -132,6 +132,7 @@ func (me ProcessDir) Attr(ctx context.Context, attr *fuse.Attr) error {
 func (me ProcessDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	sockets, err := (*me.Root).SocketProvider.GetSockets(me.Process.Id)
 	if err != nil {
+		log.Printf("Couldn't get sockets for process=%d: %s\n", me.Process.Id, err)
 		return nil, err
 	}
 	result := make([]fuse.Dirent, len(sockets))
@@ -151,6 +152,7 @@ func (me ProcessDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 func fileNameToSocketId(name string) (uint64, error) {
 	r := strings.Split(name, "_")
 	if len(r) <= 1 {
+		log.Println("GOTCHA")
 		return 0, syscall.ENOENT
 	}
 	if id, err := strconv.ParseUint(r[0], 10, 64); err == nil {
@@ -160,7 +162,7 @@ func fileNameToSocketId(name string) (uint64, error) {
 }
 
 func socketToFileName(socket ProcessSocket) string {
-	return fmt.Sprintf("%d_%s", socket.Id, "socket")
+	return socket.String() //fmt.Sprintf("%d_%s", socket.Id, "socket")
 }
 
 func (me ProcessDir) Lookup(ctx context.Context, name string) (fs.Node, error) {
@@ -170,6 +172,7 @@ func (me ProcessDir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	}
 	socket, err := (*me.Root).SocketProvider.GetProcessSocket(me.Process.Id, id)
 	if err != nil {
+		log.Println("err: " + err.Error())
 		return nil, err
 	}
 	return SocketFile{INode: socket.INode,
