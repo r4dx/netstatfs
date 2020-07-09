@@ -39,6 +39,39 @@ const (
 	MAX_STATES
 )
 
+func (me TcpState) String() string {
+	switch me {
+	case ESTABLISHED:
+		return "ESTABLISHED"
+	case SYN_SENT:
+		return "SYN_SENT"
+	case SYN_RECV:
+		return "SYN_RECV"
+	case FIN_WAIT:
+		return "FIN_WAIT"
+	case FIN_WAIT2:
+		return "FIN_WAIT2"
+	case TIME_WAIT:
+		return "TIME_WAIT"
+	case CLOSE:
+		return "CLOSE"
+	case CLOSE_WAIT:
+		return "CLOSE_WAIT"
+	case LAST_ACK:
+		return "LAST_ACK"
+	case LISTEN:
+		return "LISTEN"
+	case CLOSING:
+		return "CLOSING"
+	case NEW_SYN_RECV:
+		return "NEW_SYN_RECV"
+	case MAX_STATES:
+		return "MAX_STATES"
+	default:
+		return "unknown_state"
+	}
+}
+
 type SocketInfo struct {
 	Family     uint8
 	State      TcpState
@@ -79,7 +112,12 @@ func (me procfsSocketProvider) newSocketInfo(family, localAddr, remoteAddr, stat
 	if err != nil {
 		return r, err
 	}
-	r.str = fmt.Sprintf("%s_%s:%d->%s:%d_%s", family, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, state)
+	uiState, err := strconv.ParseUint(state, 16, 8)
+	if err != nil {
+		return r, err
+	}
+	r.State = TcpState(uiState)
+	r.str = fmt.Sprintf("%s_%s:%d->%s:%d_%s", family, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, r.State)
 	return r, nil
 }
 
