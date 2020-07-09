@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	//	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -16,8 +15,10 @@ type SocketProvider interface {
 }
 
 type procfsSocketProvider struct {
-	procfs Procfs
-	re     *regexp.Regexp
+	procfs        Procfs
+	socketINodeRe *regexp.Regexp
+	ipv4Re        *regexp.Regexp
+	ipv6Re        *regexp.Regexp
 }
 
 type TcpState uint8
@@ -39,11 +40,11 @@ const (
 )
 
 type SocketInfo struct {
-	Family uint8
-	State  TcpState
-	//	LocalIP    net.IP
-	LocalPort uint16
-	//	RemoteIP   net.IP
+	Family     uint8
+	State      TcpState
+	LocalIp    string
+	LocalPort  uint16
+	RemoteIp   string
 	RemotePort uint16
 
 	str string
@@ -67,15 +68,64 @@ func (me ProcessSocket) String() string {
 	return strconv.FormatUint(me.Id, 10) + "_" + me.SocketInfo.String()
 }
 
-func newSocketInfo(family, localAddr, remoteAddr, state string) (SocketInfo, error) {
+func (me procfsSocketProvider) newSocketInfo(family, localAddr, remoteAddr, state string) (SocketInfo, error) {
 	r := SocketInfo{}
-	r.str = fmt.Sprintf("%s_%s->%s_%s", family, localAddr, remoteAddr, state)
+	var err error
+	r.LocalIp, r.LocalPort, err = me.parseAddr(localAddr)
+	if err != nil {
+		return r, err
+	}
+	r.RemoteIp, r.RemotePort, err = me.parseAddr(remoteAddr)
+	if err != nil {
+		return r, err
+	}
+	r.str = fmt.Sprintf("%s_%s:%d->%s:%d_%s", family, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, state)
 	return r, nil
 }
 
+func (me procfsSocketProvider) parseAddr(addr string) (string, uint16, error) {
+	ipAndPort := strings.Split(addr, ":")
+	errMsg := errors.New("Not a valid IPv{4,6} address")
+	if len(ipAndPort) != 2 {
+		return "", 0, errMsg
+	}
+	port, err := strconv.ParseUint(ipAndPort[1], 16, 16)
+	if err != nil {
+		return "", 0, errMsg
+	}
+	ipAddr := ipAndPort[0]
+	if len(ipAddr) == 8 {
+		matches := me.ipv4Re.FindStringSubmatchIndex(ipAddr)
+		ip := ""
+		for i := 4; i >= 1; i-- {
+			octet, err := strconv.ParseUint(
+				string(me.ipv4Re.ExpandString([]byte{}, "$"+strconv.Itoa(i), ipAddr, matches)),
+				16, 8)
+			if err != nil {
+				return "", 0, err
+			}
+			ip = ip + strconv.FormatUint(octet, 10) + "."
+		}
+		ip = ip[0 : len(ip)-1]
+		return ip, uint16(port), nil
+
+	}
+	if len(ipAddr) == 32 {
+		ip := me.ipv6Re.ReplaceAllString(ipAddr, "$1:$2:$3:$4:$5:$6:$7:$8")
+		if ip == ipAddr {
+			return "", 0, errors.New("Not a valid IPv6 address")
+		}
+		return ip, uint16(port), nil
+	}
+	return "", 0, errMsg
+}
+
 func NewProcfsSocketProvider(procfs Procfs) SocketProvider {
-	re := regexp.MustCompile(`^(socket:\[(?P<inode>\d*)\]|\[0000\]:(?P<inode>\d*))$`)
-	return procfsSocketProvider{procfs, re}
+	socketINodeRe := regexp.MustCompile(`^(socket:\[(?P<inode>\d*)\]|\[0000\]:(?P<inode>\d*))$`)
+	ipv4Re := regexp.MustCompile(`^([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})$`)
+	ipv6Re := regexp.MustCompile(`^([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})$`)
+
+	return procfsSocketProvider{procfs, socketINodeRe, ipv4Re, ipv6Re}
 }
 
 func (me procfsSocketProvider) GetProcessSocket(processId uint, socketId uint64) (ProcessSocket, error) {
@@ -153,7 +203,7 @@ func (me procfsSocketProvider) fillSocketInfo(processSockets []ProcessSocket) er
 			if i >= len(processSockets) || processSockets[i].INode != inode {
 				continue
 			}
-			processSockets[i].SocketInfo, err = newSocketInfo(tp, localAddr, remoteAddr, state)
+			processSockets[i].SocketInfo, err = me.newSocketInfo(tp, localAddr, remoteAddr, state)
 			if err != nil {
 				return err
 			}
@@ -183,8 +233,8 @@ func removeSpacePaddings(line string) string {
 }
 
 func (me procfsSocketProvider) getINodeIfSocket(src string) (uint64, error) {
-	matches := me.re.FindStringSubmatchIndex(src)
-	outStr := string(me.re.ExpandString([]byte{}, "$inode", src, matches))
+	matches := me.socketINodeRe.FindStringSubmatchIndex(src)
+	outStr := string(me.socketINodeRe.ExpandString([]byte{}, "$inode", src, matches))
 	res, err := strconv.ParseUint(outStr, 10, 64)
 	if err != nil {
 		return 0, err

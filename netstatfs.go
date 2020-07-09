@@ -152,7 +152,6 @@ func (me ProcessDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 func fileNameToSocketId(name string) (uint64, error) {
 	r := strings.Split(name, "_")
 	if len(r) <= 1 {
-		log.Println("GOTCHA")
 		return 0, syscall.ENOENT
 	}
 	if id, err := strconv.ParseUint(r[0], 10, 64); err == nil {
