@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -80,6 +81,8 @@ type SocketInfo struct {
 	RemoteIp   string
 	RemotePort uint16
 
+	NI string
+
 	str string
 }
 
@@ -117,8 +120,57 @@ func (me procfsSocketProvider) newSocketInfo(family, localAddr, remoteAddr, stat
 		return r, err
 	}
 	r.State = TcpState(uiState)
-	r.str = fmt.Sprintf("%s_%s:%d->%s:%d_%s", family, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, r.State)
+	r.NI, err = getNI(r.LocalIp)
+	if err != nil {
+		return r, err
+	}
+	r.str = fmt.Sprintf("%s_%s_%s:%d->%s:%d_%s", family, r.NI, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, r.State)
 	return r, nil
+}
+
+func getNI(ip string) (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	src := net.ParseIP(ip)
+	if src == nil {
+		return "", errors.New("Can't get NI for address '" + ip + "' - can't parse address")
+	}
+	loopback := ""
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return "", err
+		}
+		for _, addr := range addrs {
+			cur := net.ParseIP(cutAddrMask(addr.String()))
+			if cur == nil {
+				continue
+			}
+			if cur.IsLoopback() {
+				loopback = iface.Name
+			}
+			if src.Equal(cur) {
+				return iface.Name, nil
+			}
+		}
+	}
+	if loopback == "" {
+		return "", errors.New("Can't get NI for address '" + ip + "' - not found")
+	}
+	return loopback, nil
+}
+
+func cutAddrMask(ip string) string {
+	var str strings.Builder
+	for i := 0; i < len(ip); i++ {
+		if ip[i] == '/' {
+			return str.String()
+		}
+		str.WriteByte(ip[i])
+	}
+	return ip
 }
 
 func (me procfsSocketProvider) parseAddr(addr string) (string, uint16, error) {
@@ -149,7 +201,8 @@ func (me procfsSocketProvider) parseAddr(addr string) (string, uint16, error) {
 
 	}
 	if len(ipAddr) == 32 {
-		ip := me.ipv6Re.ReplaceAllString(ipAddr, "$1:$2:$3:$4:$5:$6:$7:$8")
+		ip := me.ipv6Re.ReplaceAllString(ipAddr, "$4$3:$2$1:$8$7:$6$5:$12$11:$10$9:$16$15:$14$13")
+
 		if ip == ipAddr {
 			return "", 0, errors.New("Not a valid IPv6 address")
 		}
@@ -161,7 +214,7 @@ func (me procfsSocketProvider) parseAddr(addr string) (string, uint16, error) {
 func NewProcfsSocketProvider(procfs Procfs) SocketProvider {
 	socketINodeRe := regexp.MustCompile(`^(socket:\[(?P<inode>\d*)\]|\[0000\]:(?P<inode>\d*))$`)
 	ipv4Re := regexp.MustCompile(`^([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})$`)
-	ipv6Re := regexp.MustCompile(`^([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})([[:xdigit:]]{4})$`)
+	ipv6Re := regexp.MustCompile(`^([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})([[:xdigit:]]{2})$`)
 
 	return procfsSocketProvider{procfs, socketINodeRe, ipv4Re, ipv6Re}
 }
