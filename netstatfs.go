@@ -5,10 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
@@ -189,11 +191,38 @@ type SocketFile struct {
 
 func (me SocketFile) Attr(ctx context.Context, attr *fuse.Attr) error {
 	attr.Inode = me.INode
-	attr.Mode = 0o555 // r-xr-xr-x
-	attr.Size = 3
+	attr.Mode = 0o555
+	attr.Size = 0
 	return nil
 }
 
-func (SocketFile) ReadAll(ctx context.Context) ([]byte, error) {
-	return []byte("Hi\n"), nil
+func (me SocketFile) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
+	// 1. Need to handle open file event and create AF_PACKET socket at this point
+	//    gopacket.Lazy, gopacket.NoCopy if gopacket
+	//    Filter should include protocol={tcp,udp,icmp}{,6}, {local,remote}Port number, {local,remote}IP
+	//    For unix domain sockets - https://github.com/mechpen/sockdump (kprobe for probe_unix_stream_sendmsg)
+	// 1. NB Character device file is more applicable here but it doesn't seem like fuse library support /dev/cuse
+	// 1. So let's emulate something resembling it - file size is zero but every Read request is processed
+	//    In order to do it we need to put fuse lib into OpenDirectIO mode or else requests to empty files won't be handed to Read func
+	//    NB tools like `tail -f` track file size so we still won't be able to use it
+	//    We need to block each time there is no data - thus we also need to select on ctx.Done() in order to stop waiting when request is cancelled
+
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	select {
+	case <-time.After(time.Duration(r.Intn(5)) * time.Second):
+		resp.Data = make([]byte, req.Size)
+		realData := []byte(fmt.Sprintf("%d\n", r.Uint32()))
+		for i := 0; i < len(realData); i++ {
+			resp.Data[i] = realData[i]
+		}
+		return nil
+	case <-ctx.Done():
+		return syscall.EINTR
+	}
+}
+
+func (me SocketFile) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (fs.Handle, error) {
+	resp.Flags |= fuse.OpenDirectIO
+	return me, nil
 }
