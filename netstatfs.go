@@ -5,18 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
 )
-
-// import "github.com/google/gopacket/pcap"
 
 func main() {
 	mountpoint := flag.String("mount", "", "mountpoint for FS")
@@ -187,6 +183,7 @@ type SocketFile struct {
 	Root    *Netstatfs
 	Process Process
 	Socket  ProcessSocket
+	Sniffer Sniffer
 }
 
 func (me SocketFile) Attr(ctx context.Context, attr *fuse.Attr) error {
@@ -206,16 +203,12 @@ func (me SocketFile) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse
 	//    In order to do it we need to put fuse lib into OpenDirectIO mode or else requests to empty files won't be handed to Read func
 	//    NB tools like `tail -f` track file size so we still won't be able to use it
 	//    We need to block each time there is no data - thus we also need to select on ctx.Done() in order to stop waiting when request is cancelled
-
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
+	if req.Size <= 0 {
+		req.Size = 512
+	}
 	select {
-	case <-time.After(time.Duration(r.Intn(5)) * time.Second):
-		resp.Data = make([]byte, req.Size)
-		realData := []byte(fmt.Sprintf("%d\n", r.Uint32()))
-		for i := 0; i < len(realData); i++ {
-			resp.Data[i] = realData[i]
-		}
+	// TODO: size is ignored now
+	case resp.Data = <-me.Sniffer.Data(uint32(req.Size)):
 		return nil
 	case <-ctx.Done():
 		return syscall.EINTR
@@ -224,5 +217,18 @@ func (me SocketFile) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse
 
 func (me SocketFile) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (fs.Handle, error) {
 	resp.Flags |= fuse.OpenDirectIO
+	var err error
+	me.Sniffer, err = NewSniffer(me.Socket.SocketInfo)
+	if err != nil {
+		log.Printf("Error openning " + err.Error() + "\n")
+		return me, err
+	}
 	return me, nil
+}
+
+func (me SocketFile) Release(ctx context.Context, req *fuse.ReleaseRequest) error {
+	if me.Sniffer != nil {
+		me.Sniffer.Close()
+	}
+	return nil
 }

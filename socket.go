@@ -74,7 +74,7 @@ func (me TcpState) String() string {
 }
 
 type SocketInfo struct {
-	Family     uint8
+	Network    string
 	State      TcpState
 	LocalIp    string
 	LocalPort  uint16
@@ -104,9 +104,10 @@ func (me ProcessSocket) String() string {
 	return strconv.FormatUint(me.Id, 10) + "_" + me.SocketInfo.String()
 }
 
-func (me procfsSocketProvider) newSocketInfo(family, localAddr, remoteAddr, state string) (SocketInfo, error) {
+func (me procfsSocketProvider) newSocketInfo(network, localAddr, remoteAddr, state string) (SocketInfo, error) {
 	r := SocketInfo{}
 	var err error
+	r.Network = network
 	r.LocalIp, r.LocalPort, err = me.parseAddr(localAddr)
 	if err != nil {
 		return r, err
@@ -124,7 +125,7 @@ func (me procfsSocketProvider) newSocketInfo(family, localAddr, remoteAddr, stat
 	if err != nil {
 		return r, err
 	}
-	r.str = fmt.Sprintf("%s_%s_%s:%d->%s:%d_%s", family, r.NI, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, r.State)
+	r.str = fmt.Sprintf("%s_%s_%s:%d->%s:%d_%s", r.Network, r.NI, r.LocalIp, r.LocalPort, r.RemoteIp, r.RemotePort, r.State)
 	return r, nil
 }
 
@@ -219,7 +220,7 @@ func NewProcfsSocketProvider(procfs Procfs) SocketProvider {
 	return procfsSocketProvider{procfs, socketINodeRe, ipv4Re, ipv6Re}
 }
 
-func (me procfsSocketProvider) GetProcessSocket(processId uint, socketId uint64) (ProcessSocket, error) {
+func (me procfsSocketProvider) getProcessSocketInternal(processId uint, socketId uint64) (ProcessSocket, error) {
 	file := strconv.FormatUint(uint64(processId), 10) + "/fd/" + strconv.FormatUint(socketId, 10)
 
 	resolved, err := me.procfs.Readlink(file)
@@ -230,9 +231,22 @@ func (me procfsSocketProvider) GetProcessSocket(processId uint, socketId uint64)
 	if err != nil {
 		return ProcessSocket{}, err
 	}
-
 	return ProcessSocket{INode: inode, ProcessId: processId,
 		Id: socketId, SocketInfo: SocketInfo{}}, nil
+}
+
+func (me procfsSocketProvider) GetProcessSocket(processId uint, socketId uint64) (ProcessSocket, error) {
+	ps, err := me.getProcessSocketInternal(processId, socketId)
+	if err != nil {
+		return ProcessSocket{}, err
+	}
+	arg := make([]ProcessSocket, 1)
+	arg[0] = ps
+	err = me.fillSocketInfo(arg)
+	if err != nil {
+		return ProcessSocket{}, err
+	}
+	return arg[0], nil
 }
 
 func (me procfsSocketProvider) GetSockets(processId uint) ([]ProcessSocket, error) {
@@ -248,7 +262,7 @@ func (me procfsSocketProvider) GetSockets(processId uint) ([]ProcessSocket, erro
 		if err != nil {
 			continue
 		}
-		socket, err := me.GetProcessSocket(processId, fd)
+		socket, err := me.getProcessSocketInternal(processId, fd)
 		if err != nil {
 			continue
 		}
@@ -270,7 +284,6 @@ func (me procfsSocketProvider) fillSocketInfo(processSockets []ProcessSocket) er
 	for _, tp := range types {
 		content, err := me.procfs.ReadFile("/net/" + tp)
 		if err != nil {
-			//			return err
 			continue
 		}
 		lines := strings.Split(string(content), "\n")
