@@ -1,20 +1,34 @@
 # netstatfs
 FUSE app to map network statistics to filesystem written in GO.
 
+# How to use
+
+```
+$ git clone https://github.com/r4dx/netstatfs
+$ cd netstatfs
+$ go build
+$ mkdir m
+$ ./netstatfs --mount=m&
+$ ls m
+$ cat 
+
+
+```
+
 # Hierarchy
 ```
   /
   |-- <process_id>_<process_name>
-  |   |-- <fd>_<unix|tcp{,6}|udp{,6}>_<local_ip>:<local_port>-><remote_ip>:<remote_port>_<state>
-  |   `-- ... 
-  |-- <process_id>_<process_name>
+  |   |-- tcp{,6}
+  |   |   |-- fd_<local_addr>-><remote_addr>_<state>
+  |   |   `-- ...
+  |   |-- udp{,6}
+  |   |   `-- ...
+  |   `-- unix
+  |       |-- ...
   `-- ...
-```
 
-# Roadmap  
-1. PoC
-1. Refactoring and tests
-1. /proc/id/fd/ is linux-specific - plan for portability
+```
 
 # What netstat on Linux actually does
 1. Opens /proc/ and read all numerical ids there - those are the processes

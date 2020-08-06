@@ -40,11 +40,6 @@ func NewSniffer(si SocketInfo) (Sniffer, error) {
 }
 
 func socketInfoToBPFFilter(si SocketInfo) (string, error) {
-	if contains([]string{"unix"}, si.Network) {
-		return "",
-			errors.New(si.Network + " network type is not supported")
-	}
-	r := fmt.Sprintf("(host %s) and (host %s)", si.LocalIp, si.RemoteIp)
 	networkToFilter := map[string]string{
 		"tcp":  "tcp",
 		"tcp6": "tcp",
@@ -52,19 +47,12 @@ func socketInfoToBPFFilter(si SocketInfo) (string, error) {
 		"udp6": "udp",
 	}
 	if proto, exists := networkToFilter[si.Network]; exists {
-		r = r + fmt.Sprintf(" and (%s port %d) and (%s port %d)", proto, si.LocalPort, proto, si.RemotePort)
+		return fmt.Sprintf("%s port %d", proto, si.LocalPort), nil
 	}
-	return r, nil
+	return "",
+		errors.New(si.Network + " network type is not supported")
 }
 
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
 func (me GoPacketSniffer) dataToChannel() {
 	defer close(me.channel)
 
